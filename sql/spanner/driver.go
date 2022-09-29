@@ -6,6 +6,7 @@ package spanner
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"io/ioutil"
@@ -65,7 +66,9 @@ func Open(db schema.ExecQuerier) (migrate.Driver, error) {
 		return nil, fmt.Errorf("spanner: query database options: %w", err)
 	}
 	if err := sqlx.ScanOne(rows, &c.databaseDialect); err != nil {
-		return nil, fmt.Errorf("spanner: query database options: %w", err)
+		if err != sql.ErrNoRows {
+			return nil, fmt.Errorf("spanner: scan database options: %w", err)
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("failed to execute query: %v", err)

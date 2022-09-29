@@ -8,6 +8,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -187,7 +188,8 @@ func (i *inspect) addColumn(s *schema.Schema, rows *sql.Rows) error {
 	})
 
 	if columnDefault.Valid {
-		c.Default = defaultExpr(c, columnDefault.String)
+		// TODO(tmc): this seems broen in the emulator.
+		// c.Default = defaultExpr(c, columnDefault.String)
 	}
 	if isGenerated.String == "ALWAYS" {
 		c.Attrs = []schema.Attr{
@@ -231,7 +233,8 @@ func columnType(c *columnDesc) schema.Type {
 	// Get Type and Size from the column description.
 	typeString, typeSize, _ := typeAndSize(c.typ)
 
-	switch t := typeString; strings.ToUpper(t) {
+	t := strings.ToUpper(typeString)
+	switch t {
 	case TypeInt64:
 		typ = &schema.IntegerType{T: t}
 	case TypeBool:
@@ -257,6 +260,7 @@ func columnType(c *columnDesc) schema.Type {
 	default:
 		// typ = &schema.StringType{T: t}
 		// // TODO(tmc): clean this up
+		fmt.Fprintln(os.Stderr, "unsupported:", t)
 		typ = &schema.UnsupportedType{T: t}
 	}
 	return typ

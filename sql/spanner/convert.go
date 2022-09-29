@@ -6,6 +6,7 @@ package spanner
 
 import (
 	"fmt"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -40,9 +41,9 @@ func FormatType(t schema.Type) (string, error) {
 	case *UUIDType:
 		f = strings.ToLower(t.T)
 	case *schema.UnsupportedType:
-		return "", fmt.Errorf("spanner: unsupported type: %T(%q)", t, t.T)
+		return "", fmt.Errorf("spanner: convert: unsupported type: %T(%q)", t, t.T)
 	default:
-		return "", fmt.Errorf("spanner: invalid schema type: %T", t)
+		return "", fmt.Errorf("spanner: convert: invalid schema type: %T", t)
 	}
 	return f, nil
 }
@@ -60,6 +61,13 @@ func mustFormat(t schema.Type) string {
 // It is expected to be one of the types in https://www.spanner.org/datatypes.html,
 // or some of the common types used by ORMs like Ent.
 func ParseType(c string) (schema.Type, error) {
+	cu := strings.ToUpper(c)
+	fmt.Fprintln(os.Stderr, "ParseType!", cu, cu == TypeBytes)
+	if cu == TypeBytes {
+		return &schema.BinaryType{
+			T: cu,
+		}, nil
+	}
 	// A datatype may be zero or more names.
 	if c == "" {
 		return &schema.UnsupportedType{}, nil
