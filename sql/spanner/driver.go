@@ -113,27 +113,19 @@ func acquireLock(path string, timeout time.Duration) (schema.UnlockFunc, error) 
 
 // Standard column types (and their aliases) as defined by Spanner.
 const (
-	TypeString         = "STRING"
-	TypeStringArray    = "ARRAY<STRING>"
-	TypeBytes          = "BYTES"
-	TypeBytesArray     = "ARRAY<BYTES>"
-	TypeInt64          = "INT64"
-	TypeInt64Array     = "ARRAY<INT64>"
-	TypeBool           = "BOOL"
-	TypeBoolArray      = "ARRAY<BOOL>"
-	TypeFloat64        = "FLOAT64"
-	TypeFloat64Array   = "ARRAY<FLOAT64>"
-	TypeNumeric        = "NUMERIC"
-	TypeNumericArray   = "ARRAY<NUMERIC>"
-	TypeTimestamp      = "TIMESTAMP"
-	TypeTimestampArray = "ARRAY<TIMESTAMP>"
-	TypeDate           = "DATE"
-	TypeDateArray      = "ARRAY<DATE>"
-	TypeStruct         = "ARRAY<STRUCT>"
-	TypeJSON           = "JSON"
+	TypeString    = "STRING"
+	TypeArray     = "ARRAY"
+	TypeBytes     = "BYTES"
+	TypeInt64     = "INT64"
+	TypeBool      = "BOOL"
+	TypeFloat64   = "FLOAT64"
+	TypeNumeric   = "NUMERIC"
+	TypeTimestamp = "TIMESTAMP"
+	TypeDate      = "DATE"
+	TypeStruct    = "STRUCT"
+	TypeJSON      = "JSON"
 )
 
 const (
-	virtual = "VIRTUAL"
-	stored  = "STORED"
+	stored = "STORED"
 )

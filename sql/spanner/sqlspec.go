@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"reflect"
 	"strconv"
-	"strings"
 
 	"ariga.io/atlas/schemahcl"
 	"ariga.io/atlas/sql/internal/specutil"
@@ -83,7 +82,7 @@ func convertColumn(spec *sqlspec.Column, _ *schema.Table) (*schema.Column, error
 	if err != nil {
 		return nil, err
 	}
-	if err := specutil.ConvertGenExpr(spec.Remain(), c, storedOrVirtual); err != nil {
+	if err := specutil.ConvertGenExpr(spec.Remain(), c, storedExpr); err != nil {
 		return nil, err
 	}
 	return c, nil
@@ -173,7 +172,7 @@ var TypeRegistry = schemahcl.NewRegistry(
 var (
 	hclState = schemahcl.New(
 		schemahcl.WithTypes(TypeRegistry.Specs()),
-		schemahcl.WithScopedEnums("table.column.as.type", stored, virtual),
+		schemahcl.WithScopedEnums("table.column.as.type", stored),
 		schemahcl.WithScopedEnums("table.foreign_key.on_update", specutil.ReferenceVars...),
 		schemahcl.WithScopedEnums("table.foreign_key.on_delete", specutil.ReferenceVars...),
 	)
@@ -185,11 +184,6 @@ var (
 	EvalHCL = schemahcl.EvalFunc(evalSpec)
 )
 
-// storedOrVirtual returns a STORED or VIRTUAL
-// generated type option based on the given string.
-func storedOrVirtual(s string) string {
-	if s = strings.ToUpper(s); s == "" {
-		return virtual
-	}
+func storedExpr(s string) string {
 	return s
 }
