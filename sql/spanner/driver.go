@@ -6,13 +6,8 @@ package spanner
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"io/ioutil"
 	"net/url"
-	"os"
-	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -68,47 +63,17 @@ func Open(db schema.ExecQuerier) (migrate.Driver, error) {
 		return nil, fmt.Errorf("spanner: query database options: %w", err)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("failed to execute query: %v", err)
+		return nil, fmt.Errorf("spanner: failed to execute query: %w", err)
 	}
 	return &Driver{
 		conn:      c,
 		Inspector: &inspect{c},
-		// Differ:      &sqlx.Diff{DiffDriver: &diff{c}},
-		// PlanApplier: &planApply{c},
 	}, nil
 }
 
 // Lock implements the schema.Locker interface.
 func (d *Driver) Lock(_ context.Context, name string, timeout time.Duration) (schema.UnlockFunc, error) {
-	path := filepath.Join(os.TempDir(), name+".lock")
-	c, err := ioutil.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return acquireLock(path, timeout)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("sql/spanner: reading lock dir: %w", err)
-	}
-	expires, err := strconv.ParseInt(string(c), 10, 64)
-	if err != nil {
-		return nil, fmt.Errorf("sql/spanner: invalid lock file format: parsing expiration date: %w", err)
-	}
-	if time.Unix(0, expires).After(time.Now()) {
-		// Lock is still valid.
-		return nil, fmt.Errorf("sql/spanner: lock on %q already taken", name)
-	}
-	return acquireLock(path, timeout)
-}
-
-func acquireLock(path string, timeout time.Duration) (schema.UnlockFunc, error) {
-	lock, err := os.Create(path)
-	if err != nil {
-		return nil, fmt.Errorf("sql/spanner: creating lockfile %q: %w", path, err)
-	}
-	if _, err := lock.Write([]byte(strconv.FormatInt(time.Now().Add(timeout).UnixNano(), 10))); err != nil {
-		return nil, fmt.Errorf("sql/spanner: writing to lockfile %q: %w", path, err)
-	}
-	defer lock.Close()
-	return func() error { return os.Remove(path) }, nil
+	return func() error { return nil }, nil
 }
 
 // Standard column types (and their aliases) as defined by Spanner.
