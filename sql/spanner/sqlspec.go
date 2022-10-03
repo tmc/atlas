@@ -99,7 +99,7 @@ func schemaSpec(schem *schema.Schema) (*sqlspec.Schema, []*sqlspec.Table, error)
 	return specutil.FromSchema(schem, tableSpec)
 }
 
-// tableSpec converts from a concrete  sqlspec.Table to a schema.Table.
+// tableSpec converts from a concrete sqlspec.Table to a schema.Table.
 func tableSpec(tab *schema.Table) (*sqlspec.Table, error) {
 	return specutil.FromTable(
 		tab,
@@ -145,8 +145,6 @@ func columnTypeSpec(t schema.Type) (*sqlspec.Column, error) {
 
 // TypeRegistry contains the supported TypeSpecs for the spanner driver.
 var TypeRegistry = schemahcl.NewRegistry(
-	schemahcl.WithFormatter(FormatType),
-	schemahcl.WithParser(ParseType),
 	schemahcl.WithSpecs(
 		schemahcl.NewTypeSpec(TypeString, schemahcl.WithAttributes(schemahcl.SizeTypeAttr(false))),
 		schemahcl.NewTypeSpec(TypeBytes, schemahcl.WithAttributes(schemahcl.SizeTypeAttr(false))),
