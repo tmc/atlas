@@ -13,11 +13,10 @@ import (
 	"ariga.io/atlas/sql/schema"
 	"cloud.google.com/go/civil"
 	"cloud.google.com/go/spanner"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
-
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type mockValueConverter struct{}

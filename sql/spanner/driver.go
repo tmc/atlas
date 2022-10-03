@@ -71,10 +71,8 @@ func Open(db schema.ExecQuerier) (migrate.Driver, error) {
 		return nil, fmt.Errorf("failed to execute query: %v", err)
 	}
 	return &Driver{
-		conn:        c,
-		Differ:      &sqlx.Diff{DiffDriver: &diff{c}},
-		Inspector:   &inspect{c},
-		PlanApplier: &planApply{c},
+		conn:      c,
+		Inspector: &inspect{c},
 	}, nil
 }
 
