@@ -338,6 +338,7 @@ func (i *inspect) addIndexes(s *schema.Schema, rows *sql.Rows) error {
 				return fmt.Errorf("spanner: unknown index type %q", typ.String)
 			}
 		}
+		// Add IndexColumnPart if it doesn't exist.
 		part := &schema.IndexPart{
 			Desc:  desc.Bool,
 			SeqNo: int(ordinalPos.Int64),
