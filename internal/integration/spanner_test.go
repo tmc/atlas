@@ -8,7 +8,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -49,12 +48,12 @@ func stRun(t *testing.T, fn func(*spannerTest)) {
 					tt.rrw = &rrw{}
 					tt.db, err = sql.Open("spanner", "projects/atlas-dev/instances/instance-1/databases/db-1")
 					if err != nil {
-						log.Fatalln(err)
+						t.Fatal(err)
 					}
 					dbs = append(dbs, tt.db) // close connection after all tests have been run
 					tt.drv, err = spanner.Open(tt.db)
 					if err != nil {
-						log.Fatalln(err)
+						t.Fatal(err)
 					}
 				})
 				tt := &spannerTest{T: t, db: tt.db, drv: tt.drv, version: version, port: tt.port, rrw: tt.rrw}
@@ -101,7 +100,6 @@ func TestSpanner_ColumnCheck(t *testing.T) {
 func TestSpanner_AddColumns(t *testing.T) {
 	stRun(t, func(t *spannerTest) {
 		usersT := t.users()
-		t.dropTables(usersT.Name)
 		t.migrate(&schema.AddTable{T: usersT})
 		_, err := t.db.Exec("CREATE EXTENSION IF NOT EXISTS hstore")
 		require.NoError(t, err)
@@ -1317,14 +1315,16 @@ func (t *spannerTest) migrate(changes ...schema.Change) {
 
 func (t *spannerTest) dropTables(names ...string) {
 	t.Cleanup(func() {
-		_, err := t.db.Exec("DROP TABLE IF EXISTS " + strings.Join(names, ", "))
-		require.NoError(t.T, err, "drop tables %q", names)
+		for _, tbl := range names {
+			_, err := t.db.Exec("DROP TABLE " + tbl)
+			require.NoError(t.T, err, "drop table %q", tbl)
+		}
 	})
 }
 
 func (t *spannerTest) dropSchemas(names ...string) {
 	t.Cleanup(func() {
-		_, err := t.db.Exec("DROP SCHEMA IF EXISTS " + strings.Join(names, ", ") + " CASCADE")
+		_, err := t.db.Exec("DROP SCHEMA " + strings.Join(names, ", ") + " CASCADE")
 		require.NoError(t.T, err, "drop schema %q", names)
 	})
 }
