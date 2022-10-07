@@ -282,12 +282,6 @@ func (s *state) fks(b *sqlx.Builder, fks ...*schema.ForeignKey) {
 				b.Ident(fk.RefColumns[i].Name)
 			})
 		})
-		if fk.OnUpdate != "" {
-			b.P("ON UPDATE", string(fk.OnUpdate))
-		}
-		if fk.OnDelete != "" {
-			b.P("ON DELETE", string(fk.OnDelete))
-		}
 	})
 }
 

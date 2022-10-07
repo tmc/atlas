@@ -73,7 +73,8 @@ func TestSpanner_AddDropTable(t *testing.T) {
 	stRun(t, func(t *spannerTest) {
 		usersT := t.users()
 		postsT := t.posts()
-		t.dropTables(usersT.Name, postsT.Name)
+		t.dropIndexes("idx_author_id", "idx_id_author_id_unique")
+		t.dropTables(postsT.Name, usersT.Name)
 		t.migrate(&schema.AddTable{T: usersT}, &schema.AddTable{T: postsT})
 		ensureNoChange(t, usersT)
 		t.migrate(&schema.DropTable{T: usersT}, &schema.DropTable{T: postsT})
@@ -1286,16 +1287,16 @@ func (t *spannerTest) posts() *schema.Table {
 				Type: &schema.ColumnType{Raw: "INT64", Type: &schema.IntegerType{T: "INT64"}},
 			},
 			{
-				Name:    "author_id",
-				Type:    &schema.ColumnType{Raw: "INT64", Type: &schema.IntegerType{T: "INT64"}, Null: true},
-				Default: &schema.Literal{V: "10"},
+				Name: "author_id",
+				Type: &schema.ColumnType{Raw: "INT64", Type: &schema.IntegerType{T: "INT64"}, Null: true},
+				// Default: &schema.Literal{V: "10"},
 			},
 			{
 				Name: "ctime",
 				Type: &schema.ColumnType{Raw: "timestamp", Type: &schema.TimeType{T: "timestamp"}},
-				Default: &schema.RawExpr{
-					X: "CURRENT_TIMESTAMP",
-				},
+				// Default: &schema.RawExpr{
+				// 	X: "CURRENT_TIMESTAMP",
+				// },
 			},
 		},
 		Attrs: []schema.Attr{
@@ -1304,8 +1305,8 @@ func (t *spannerTest) posts() *schema.Table {
 	}
 	postsT.PrimaryKey = &schema.Index{Parts: []*schema.IndexPart{{C: postsT.Columns[0]}}}
 	postsT.Indexes = []*schema.Index{
-		{Name: "author_id", Parts: []*schema.IndexPart{{C: postsT.Columns[1]}}},
-		{Name: "id_author_id_unique", Unique: true, Parts: []*schema.IndexPart{{C: postsT.Columns[1]}, {C: postsT.Columns[0]}}},
+		{Name: "idx_author_id", Parts: []*schema.IndexPart{{C: postsT.Columns[1]}}},
+		{Name: "idx_id_author_id_unique", Unique: true, Parts: []*schema.IndexPart{{C: postsT.Columns[1]}, {C: postsT.Columns[0]}}},
 	}
 	postsT.ForeignKeys = []*schema.ForeignKey{
 		{Symbol: "author_id", Table: postsT, Columns: postsT.Columns[1:2], RefTable: usersT, RefColumns: usersT.Columns[:1], OnDelete: schema.NoAction},
@@ -1339,10 +1340,28 @@ func (t *spannerTest) migrate(changes ...schema.Change) {
 	require.NoError(t, err)
 }
 
+func (t *spannerTest) dropIndexes(names ...string) {
+	t.Cleanup(func() {
+		for _, idx := range names {
+			// fmt.Println("DROP INDEX " + idx)
+			_, err := t.db.Exec("DROP INDEX " + idx)
+			// fmt.Println("DROP INDEX " + idx + ":" + err.Error())
+			// TODO(tmc): Check code more carefully.
+			if err != nil {
+				if !strings.Contains(err.Error(), fmt.Sprintf("Index not found: %v", idx)) {
+					require.NoError(t.T, err, "drop index %q", idx)
+				}
+			}
+		}
+	})
+}
+
 func (t *spannerTest) dropTables(names ...string) {
 	t.Cleanup(func() {
 		for _, tbl := range names {
+			// fmt.Println("DROP TABLE " + tbl)
 			_, err := t.db.Exec("DROP TABLE " + tbl)
+			// fmt.Println("DROP TABLE " + tbl + ":" + err.Error())
 			// TODO(tmc): Check code more carefully.
 			if err != nil {
 				if !strings.Contains(err.Error(), fmt.Sprintf("Table not found: %v", tbl)) {
