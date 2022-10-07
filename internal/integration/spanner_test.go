@@ -71,7 +71,35 @@ func TestSpanner_Executor(t *testing.T) {
 
 func TestSpanner_AddDropTable(t *testing.T) {
 	stRun(t, func(t *spannerTest) {
-		testAddDrop(t)
+		usersT := t.users()
+		postsT := t.posts()
+		t.dropTables(usersT.Name, postsT.Name)
+		t.migrate(&schema.AddTable{T: usersT}, &schema.AddTable{T: postsT})
+		ensureNoChange(t, usersT)
+		t.migrate(&schema.DropTable{T: usersT}, &schema.DropTable{T: postsT})
+		// Ensure the realm is empty.
+		require.EqualValues(t, t.realm(), t.loadRealm())
+		/*
+				postsT := t.posts()
+				petsT := &schema.Table{
+					Name:   "pets",
+					Schema: usersT.Schema,
+					Columns: []*schema.Column{
+						{Name: "id", Type: &schema.ColumnType{Type: &schema.IntegerType{T: "INT64"}}},
+						{Name: "owner_id", Type: &schema.ColumnType{Type: &schema.IntegerType{T: "INT64"}, Null: true}},
+					},
+				}
+				petsT.PrimaryKey = &schema.Index{Parts: []*schema.IndexPart{{C: postsT.Columns[0]}}}
+				// petsT.ForeignKeys = []*schema.ForeignKey{
+				// 	{Symbol: "owner_id", Table: petsT, Columns: petsT.Columns[1:], RefTable: usersT, RefColumns: usersT.Columns[:1]},
+				// }
+			t.dropTables(postsT.Name, usersT.Name, petsT.Name)
+			t.migrate(&schema.AddTable{T: petsT}, &schema.AddTable{T: usersT}, &schema.AddTable{T: postsT})
+			ensureNoChange(t, usersT, petsT, postsT)
+			t.migrate(&schema.DropTable{T: usersT}, &schema.DropTable{T: postsT}, &schema.DropTable{T: petsT})
+			// Ensure the realm is empty.
+			require.EqualValues(t, t.realm(), t.loadRealm())
+		*/
 	})
 }
 
@@ -87,8 +115,8 @@ func TestSpanner_ColumnCheck(t *testing.T) {
 			Name:  "users",
 			Attrs: []schema.Attr{schema.NewCheck().SetName("users_c_check").SetExpr("c > 5")},
 			Columns: []*schema.Column{
-				{Name: "id", Type: &schema.ColumnType{Type: &schema.IntegerType{T: "int"}}},
-				{Name: "c", Type: &schema.ColumnType{Type: &schema.IntegerType{T: "int"}}},
+				{Name: "id", Type: &schema.ColumnType{Type: &schema.IntegerType{T: "INT64"}}},
+				{Name: "c", Type: &schema.ColumnType{Type: &schema.IntegerType{T: "INT64"}}},
 			},
 		}
 		t.dropTables(usersT.Name)
@@ -101,8 +129,6 @@ func TestSpanner_AddColumns(t *testing.T) {
 	stRun(t, func(t *spannerTest) {
 		usersT := t.users()
 		t.migrate(&schema.AddTable{T: usersT})
-		_, err := t.db.Exec("CREATE EXTENSION IF NOT EXISTS hstore")
-		require.NoError(t, err)
 		usersT.Columns = append(
 			usersT.Columns,
 			&schema.Column{Name: "a", Type: &schema.ColumnType{Type: &schema.BinaryType{T: "bytea"}}},
@@ -131,7 +157,7 @@ func TestSpanner_ColumnInt(t *testing.T) {
 		stRun(t, func(t *spannerTest) {
 			usersT := &schema.Table{
 				Name:    "users",
-				Columns: []*schema.Column{{Name: "a", Type: &schema.ColumnType{Type: &schema.IntegerType{T: "bigint"}}}},
+				Columns: []*schema.Column{{Name: "a", Type: &schema.ColumnType{Type: &schema.IntegerType{T: "INT64"}}}},
 			}
 			err := t.drv.ApplyChanges(ctx, []schema.Change{&schema.AddTable{T: usersT}})
 			require.NoError(t, err)
@@ -172,7 +198,7 @@ func disabledTestSpanner_ColumnArray(t *testing.T) {
 		// Add column.
 		usersT.Columns = append(
 			usersT.Columns,
-			// &schema.Column{Name: "a", Type: &schema.ColumnType{Raw: "int[]", Type: &spanner.ArrayType{Type: &schema.IntegerType{T: "int"}, T: "int[]"}}, Default: &schema.Literal{V: "'{1}'"}},
+			// &schema.Column{Name: "a", Type: &schema.ColumnType{Raw: "int[]", Type: &spanner.ArrayType{Type: &schema.IntegerType{T: "INT64"}, T: "int[]"}}, Default: &schema.Literal{V: "'{1}'"}},
 		)
 		changes := t.diff(t.loadUsers(), usersT)
 		require.Len(t, changes, 1)
@@ -311,7 +337,7 @@ func TestSpanner_ForeignKey(t *testing.T) {
 			// Add foreign key.
 			usersT.Columns = append(usersT.Columns, &schema.Column{
 				Name: "spouse_id",
-				Type: &schema.ColumnType{Raw: "bigint", Type: &schema.IntegerType{T: "bigint"}, Null: true},
+				Type: &schema.ColumnType{Raw: "INT64", Type: &schema.IntegerType{T: "INT64"}, Null: true},
 			})
 			usersT.ForeignKeys = append(usersT.ForeignKeys, &schema.ForeignKey{
 				Symbol:     "spouse_id",
@@ -373,7 +399,7 @@ func TestSpanner_Ent(t *testing.T) {
 				Changes: []schema.Change{
 					&schema.ModifyColumn{
 						From:   globalT.Columns[0],
-						To:     schema.NewIntColumn("id", "int"),
+						To:     schema.NewIntColumn("id", "INT64"),
 						Change: schema.ChangeAttr,
 					},
 				},
@@ -555,7 +581,7 @@ func TestSpanner_Snapshot(t *testing.T) {
 			&schema.AddTable{T: schema.NewTable("my_table").
 				AddColumns(
 					schema.NewIntColumn("col_1", "integer").SetNull(true),
-					schema.NewIntColumn("col_2", "bigint"),
+					schema.NewIntColumn("col_2", "INT64"),
 				),
 			},
 		}))
@@ -872,7 +898,7 @@ create table atlas_types_sanity
     "tText"                text                        default 'atlas'                                  null,
     "tSmallInt"            smallint                    default '10'                                     null,
     "tInteger"             integer                     default '10'                                     null,
-    "tBigInt"              bigint                      default '10'                                     null,
+    "tBigInt"              INT64                      default '10'                                     null,
     "tInt"                 int                         default '10'                                     null,
     "tInt2"                int2                        default '10'                                     null,
     "tInt4"                int4                        default '10'                                     null,
@@ -982,7 +1008,7 @@ create table atlas_types_sanity
 				},
 				{
 					Name:    "tBigInt",
-					Type:    &schema.ColumnType{Type: &schema.IntegerType{T: "bigint"}, Raw: "bigint", Null: true},
+					Type:    &schema.ColumnType{Type: &schema.IntegerType{T: "INT64"}, Raw: "INT64", Null: true},
 					Default: &schema.Literal{V: "10"},
 				},
 				{
@@ -1002,7 +1028,7 @@ create table atlas_types_sanity
 				},
 				{
 					Name:    "tInt8",
-					Type:    &schema.ColumnType{Type: &schema.IntegerType{T: "bigint"}, Raw: "bigint", Null: true},
+					Type:    &schema.ColumnType{Type: &schema.IntegerType{T: "INT64"}, Raw: "INT64", Null: true},
 					Default: &schema.Literal{V: "10"},
 				},
 				{
@@ -1120,7 +1146,7 @@ create table atlas_types_sanity
 				},
 				{
 					Name: "tBigSerial",
-					Type: &schema.ColumnType{Type: &schema.IntegerType{T: "bigint", Unsigned: false}, Raw: "bigint", Null: false},
+					Type: &schema.ColumnType{Type: &schema.IntegerType{T: "INT64", Unsigned: false}, Raw: "INT64", Null: false},
 					Default: &schema.RawExpr{
 						X: "nextval('\"atlas_types_sanity_tBigSerial_seq\"'::regclass)",
 					},
@@ -1141,7 +1167,7 @@ create table atlas_types_sanity
 				},
 				{
 					Name: "tSerial8",
-					Type: &schema.ColumnType{Type: &schema.IntegerType{T: "bigint", Unsigned: false}, Raw: "bigint", Null: false},
+					Type: &schema.ColumnType{Type: &schema.IntegerType{T: "INT64", Unsigned: false}, Raw: "INT64", Null: false},
 					Default: &schema.RawExpr{
 						X: "nextval('\"atlas_types_sanity_tSerial8_seq\"'::regclass)",
 					},
@@ -1237,11 +1263,11 @@ func (t *spannerTest) users() *schema.Table {
 		Columns: []*schema.Column{
 			{
 				Name: "id",
-				Type: &schema.ColumnType{Raw: "bigint", Type: &schema.IntegerType{T: "bigint"}},
+				Type: &schema.ColumnType{Raw: "INT64", Type: &schema.IntegerType{T: "INT64"}},
 			},
 			{
 				Name: "x",
-				Type: &schema.ColumnType{Raw: "bigint", Type: &schema.IntegerType{T: "bigint"}},
+				Type: &schema.ColumnType{Raw: "INT64", Type: &schema.IntegerType{T: "INT64"}},
 			},
 		},
 	}
@@ -1257,11 +1283,11 @@ func (t *spannerTest) posts() *schema.Table {
 		Columns: []*schema.Column{
 			{
 				Name: "id",
-				Type: &schema.ColumnType{Raw: "bigint", Type: &schema.IntegerType{T: "bigint"}},
+				Type: &schema.ColumnType{Raw: "INT64", Type: &schema.IntegerType{T: "INT64"}},
 			},
 			{
 				Name:    "author_id",
-				Type:    &schema.ColumnType{Raw: "bigint", Type: &schema.IntegerType{T: "bigint"}, Null: true},
+				Type:    &schema.ColumnType{Raw: "INT64", Type: &schema.IntegerType{T: "INT64"}, Null: true},
 				Default: &schema.Literal{V: "10"},
 			},
 			{
@@ -1317,7 +1343,12 @@ func (t *spannerTest) dropTables(names ...string) {
 	t.Cleanup(func() {
 		for _, tbl := range names {
 			_, err := t.db.Exec("DROP TABLE " + tbl)
-			require.NoError(t.T, err, "drop table %q", tbl)
+			// TODO(tmc): Check code more carefully.
+			if err != nil {
+				if !strings.Contains(err.Error(), fmt.Sprintf("Table not found: %v", tbl)) {
+					require.NoError(t.T, err, "drop table %q", tbl)
+				}
+			}
 		}
 	})
 }
