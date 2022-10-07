@@ -65,8 +65,9 @@ func Open(db schema.ExecQuerier) (migrate.Driver, error) {
 		return nil, fmt.Errorf("spanner: failed to execute query: %w", err)
 	}
 	return &Driver{
-		conn:      c,
-		Inspector: &inspect{c},
+		conn:        c,
+		Inspector:   &inspect{c},
+		PlanApplier: &planApply{c},
 	}, nil
 }
 
