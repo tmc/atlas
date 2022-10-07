@@ -500,8 +500,9 @@ type (
 
 	// columnDesc represents a column descriptor.
 	columnDesc struct {
-		typ  string
-		size int
+		typ       string
+		size      int
+		sizeIsMax bool
 	}
 
 	// ParentTable defines an Interleaved tables parent.
