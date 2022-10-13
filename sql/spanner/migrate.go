@@ -71,6 +71,10 @@ func (s *state) plan(ctx context.Context, changes []schema.Change) (err error) {
 			err = s.modifyTable(ctx, c)
 		case *schema.RenameTable:
 			s.renameTable(c)
+		case *schema.DropIndex:
+			s.dropIndexes(c.I.Table, c.I)
+		case *schema.DropForeignKey:
+			s.dropForeignKeys(c.F.Table, c.F)
 		case *schema.DropSchema:
 			// skip
 			return nil
@@ -145,7 +149,6 @@ func (s *state) dropTable(drop *schema.DropTable) error {
 // modifyTable builds and executes the queries for bringing the table into its modified state.
 // If the modification contains changes that are not index creation/deletion or a simple column
 // addition, the changes are applied using a temporary table following the procedure mentioned
-// in: https://www.spanner.org/lang_altertable.html#making_other_kinds_of_table_schema_changes.
 func (s *state) modifyTable(ctx context.Context, modify *schema.ModifyTable) error {
 	if alterable(modify) {
 		return s.alterTable(modify)
@@ -153,8 +156,11 @@ func (s *state) modifyTable(ctx context.Context, modify *schema.ModifyTable) err
 	s.skipFKs = true
 	newT := *modify.T
 	indexes := newT.Indexes
+	fks := newT.ForeignKeys
 	newT.Indexes = nil
+	newT.ForeignKeys = nil
 	newT.Name = "new_" + newT.Name
+
 	// Create a new table with a temporary name, and copy the existing rows to it.
 	if err := s.addTable(ctx, &schema.AddTable{T: &newT}); err != nil {
 		return err
@@ -162,18 +168,53 @@ func (s *state) modifyTable(ctx context.Context, modify *schema.ModifyTable) err
 	if err := s.copyRows(modify.T, &newT, modify.Changes); err != nil {
 		return err
 	}
-	// Drop the current table, and rename the new one to its real name.
+
+	// TODO(tmc): either drop or fix-up FKs in the mix here.
+
+	// Drop the current table, create the new one, and copy the rows back.
 	s.append(&migrate.Change{
 		Cmd:     Build("DROP TABLE").Ident(modify.T.Name).String(),
 		Source:  modify,
 		Comment: fmt.Sprintf("drop %q table after copying rows", modify.T.Name),
 	})
+	// walk foreign keys and swap out prefixes.
+
+	newNewT := newT
+	newNewT.Name = modify.T.Name
+	if err := s.addTable(ctx, &schema.AddTable{T: &newNewT}); err != nil {
+		return err
+	}
+	var reverseChanges []schema.Change
+	for _, c := range modify.Changes {
+		reverseChanges = append(reverseChanges, c)
+	}
+
+	// TODO(tmc): Prepare the reverse changes.
+	if err := s.copyRows(&newT, &newNewT, reverseChanges); err != nil {
+		return err
+	}
+	/*
+		s.append(&migrate.Change{
+			Cmd:     Build("ALTER TABLE").Ident(newT.Name).P("RENAME TO").Ident(modify.T.Name).String(),
+			Source:  modify,
+			Comment: fmt.Sprintf("rename temporary table %q to %q", newT.Name, modify.T.Name),
+		})
+	*/
+	// TODO: do we need to prefix/re-prefix the indexes?
+	if err := s.addIndexes(modify.T, indexes...); err != nil {
+		return err
+	}
+	// TODO: do we need to prefix/re-prefix the fks
+	if err := s.addForeignKeys(modify.T, fks...); err != nil {
+		return err
+	}
+	// drop the intermediate table:
 	s.append(&migrate.Change{
-		Cmd:     Build("ALTER TABLE").Ident(newT.Name).P("RENAME TO").Ident(modify.T.Name).String(),
+		Cmd:     Build("DROP TABLE").Ident(newT.Name).String(),
 		Source:  modify,
-		Comment: fmt.Sprintf("rename temporary table %q to %q", newT.Name, modify.T.Name),
+		Comment: fmt.Sprintf("drop temporary table %q", newT.Name),
 	})
-	return s.addIndexes(modify.T, indexes...)
+	return nil
 }
 
 func (s *state) renameTable(c *schema.RenameTable) {
@@ -264,6 +305,42 @@ func (s *state) indexParts(b *sqlx.Builder, parts []*schema.IndexPart) {
 	})
 }
 
+func (s *state) dropForeignKeys(t *schema.Table, foreignKeys ...*schema.ForeignKey) error {
+	rs := &state{conn: s.conn}
+	if err := rs.addForeignKeys(t, foreignKeys...); err != nil {
+		return err
+	}
+	for i := range rs.Changes {
+		s.append(&migrate.Change{
+			Cmd:     rs.Changes[i].Reverse,
+			Reverse: rs.Changes[i].Cmd,
+			Comment: fmt.Sprintf("drop foreignKey %q from table: %q", foreignKeys[i].Symbol, t.Name),
+		})
+	}
+	return nil
+}
+
+func (s *state) addForeignKeys(t *schema.Table, foreignKeys ...*schema.ForeignKey) error {
+	for _, fk := range foreignKeys {
+		b := Build("ALTER TABLE")
+		b.Ident(t.Name)
+		b.P("ADD")
+		s.fks(b, foreignKeys...)
+		fkName := fk.Symbol
+		// TODO: derive fk name if we don't have one in Symbol.
+		s.append(&migrate.Change{
+			Cmd:    b.String(),
+			Source: &schema.AddForeignKey{F: fk},
+			Reverse: Build("ALTER TABLE").
+				Ident(t.Name).
+				P(fmt.Sprintf("DROP CONSTRAINT %v", fkName)).
+				String(),
+			Comment: fmt.Sprintf("create foreignKey %q to table: %q", fk.Symbol, t.Name),
+		})
+	}
+	return nil
+}
+
 func (s *state) fks(b *sqlx.Builder, fks ...*schema.ForeignKey) {
 	b.MapComma(fks, func(i int, b *sqlx.Builder) {
 		fk := fks[i]
@@ -276,12 +353,14 @@ func (s *state) fks(b *sqlx.Builder, fks ...*schema.ForeignKey) {
 				b.Ident(fk.Columns[i].Name)
 			})
 		})
-		b.P("REFERENCES").Ident(fk.RefTable.Name)
-		b.Wrap(func(b *sqlx.Builder) {
-			b.MapComma(fk.RefColumns, func(i int, b *sqlx.Builder) {
-				b.Ident(fk.RefColumns[i].Name)
+		if fk.RefTable != nil {
+			b.P("REFERENCES").Ident(fk.RefTable.Name)
+			b.Wrap(func(b *sqlx.Builder) {
+				b.MapComma(fk.RefColumns, func(i int, b *sqlx.Builder) {
+					b.Ident(fk.RefColumns[i].Name)
+				})
 			})
-		})
+		}
 	})
 }
 

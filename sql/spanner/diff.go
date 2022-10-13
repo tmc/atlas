@@ -14,12 +14,11 @@ import (
 	"ariga.io/atlas/sql/schema"
 )
 
-// A diff provides a SQLite implementation for sqlx.DiffDriver.
+// A diff provides a Spanner implementation for sqlx.DiffDriver.
 type diff struct{ conn }
 
 // SchemaAttrDiff returns a changeset for migrating schema attributes from one state to the other.
 func (d *diff) SchemaAttrDiff(_, _ *schema.Schema) []schema.Change {
-	// No special schema attribute diffing for SQLite.
 	return nil
 }
 
@@ -109,8 +108,6 @@ func (*diff) IndexPartAttrChanged(_, _ *schema.IndexPart) bool {
 
 // ReferenceChanged reports if the foreign key referential action was changed.
 func (*diff) ReferenceChanged(from, to schema.ReferenceOption) bool {
-	// According to SQLite, if an action is not explicitly
-	// specified, it defaults to "NO ACTION".
 	if from == "" {
 		from = schema.NoAction
 	}

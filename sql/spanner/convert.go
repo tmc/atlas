@@ -35,9 +35,12 @@ func FormatType(t schema.Type) (string, error) {
 	case *schema.SpatialType:
 		f = t.T
 	case *schema.BinaryType:
-		siz := fmt.Sprint(t.Size)
-		if sqlx.Has(t.Attrs, &MaxSize{}) {
+		siz := ""
+		if t.Size == nil || sqlx.Has(t.Attrs, &MaxSize{}) {
 			siz = "MAX"
+		}
+		if siz == "" && t.Size != nil {
+			siz = fmt.Sprint(*t.Size)
 		}
 		f = fmt.Sprintf("%v(%v)", t.T, siz)
 	case *schema.StringType:

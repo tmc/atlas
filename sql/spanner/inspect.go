@@ -245,6 +245,8 @@ func columnType(spannerType string) (schema.Type, error) {
 		typ = &schema.JSONType{T: col.typ}
 	case TypeNumeric:
 		typ = &schema.DecimalType{T: col.typ}
+	case TypeFloat64:
+		typ = &schema.FloatType{T: col.typ}
 	default:
 		if strings.HasPrefix(col.typ, TypeString) {
 			typ = &schema.StringType{
@@ -639,6 +641,8 @@ where
 	idx.index_type in ('INDEX', 'PRIMARY_KEY')
 	and idx.table_schema = @schema
 	and idx_col.table_name in unnest (@table)
+	and not STARTS_WITH(idx.index_name, 'IDX_')
+	and not idx.SPANNER_IS_MANAGED
 order by
 	table_name, index_name, column_position
 `
