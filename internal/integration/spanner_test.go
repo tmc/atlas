@@ -21,7 +21,7 @@ import (
 
 type spannerTest struct {
 	*testing.T
-	db      *sql.DB
+	db      execQueryCloser
 	drv     migrate.Driver
 	rrw     migrate.RevisionReadWriter
 	version string
@@ -46,6 +46,12 @@ func stRun(t *testing.T, fn func(*spannerTest)) {
 						t.Fatal(err)
 					}
 					dbs = append(dbs, tt.db) // close connection after all tests have been run
+					if testing.Verbose() {
+						tt.db = &debugDB{
+							DB: tt.db.(*sql.DB),
+							t:  t,
+						}
+					}
 					tt.drv, err = spanner.Open(tt.db)
 					if err != nil {
 						t.Fatal(err)
@@ -113,6 +119,24 @@ schema "default" {
 		t.applyHcl(empty)
 		require.Empty(t, t.realm().Schemas[0].Tables)
 	})
+}
+
+// debugDB wraps a sql.DB and prints the queries run to the associated testing.T.
+type debugDB struct {
+	*sql.DB
+	t *testing.T
+}
+
+func (db *debugDB) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	db.t.Helper()
+	db.t.Log("query:", query, args)
+	return db.DB.QueryContext(ctx, query, args...)
+}
+
+func (db *debugDB) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	db.t.Helper()
+	db.t.Log("exec:", query, args)
+	return db.DB.ExecContext(ctx, query, args...)
 }
 
 func TestSpanner_AddDropTable(t *testing.T) {
