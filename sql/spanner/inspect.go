@@ -24,6 +24,9 @@ var _ schema.Inspector = (*inspect)(nil)
 // defaultSchemaNameAlias is what we map Spanner's empty schema to to enable it to be referenced in HCL representations.
 const defaultSchemaNameAlias = "default"
 
+// sizedTypeRe parses spanner types such as "STRING(50)" or "BYTES(MAX)".
+var sizedTypeRe = regexp.MustCompile(`(\w+)(?:\((-?\d+|MAX)\))?`)
+
 // InspectRealm returns schema descriptions of all resources in the given realm.
 func (i *inspect) InspectRealm(ctx context.Context, opts *schema.InspectRealmOption) (*schema.Realm, error) {
 	schemas, err := i.schemas(ctx, opts)
@@ -91,7 +94,7 @@ func (i *inspect) inspectTables(ctx context.Context, r *schema.Realm, opts *sche
 
 // table returns the table from the database, or a NotExistError if the table was not found.
 func (i *inspect) tables(ctx context.Context, realm *schema.Realm, opts *schema.InspectOptions) error {
-	var schemas []string
+	var schemas []any
 	for _, s := range realm.Schemas {
 		sName := s.Name
 		// Here we reverse the schema alias.
@@ -100,7 +103,8 @@ func (i *inspect) tables(ctx context.Context, realm *schema.Realm, opts *schema.
 		}
 		schemas = append(schemas, sName)
 	}
-	rows, err := i.QueryContext(ctx, tablesQuery, schemas)
+	query := fmt.Sprintf(tablesQuery, nArgs(len(realm.Schemas)))
+	rows, err := i.QueryContext(ctx, query, schemas...)
 	if err != nil {
 		return fmt.Errorf("query tables: %w", err)
 	}
@@ -201,9 +205,6 @@ func (i *inspect) addColumn(s *schema.Schema, rows *sql.Rows) error {
 	t.AddColumns(c)
 	return nil
 }
-
-// sizedTypeRe parses spanner types such as "STRING(50)" or "BYTES(MAX)".
-var sizedTypeRe = regexp.MustCompile(`(\w+)(?:\((-?\d+|MAX)\))?`)
 
 // Converts spanner string type to schema.Type.
 func columnType(spannerType string) (schema.Type, error) {
@@ -395,7 +396,6 @@ func (i *inspect) checks(ctx context.Context, s *schema.Schema) error {
 func (i *inspect) schemas(ctx context.Context, opts *schema.InspectRealmOption) ([]*schema.Schema, error) {
 	var (
 		args    []any
-		sArgs   []string
 		query   = schemasQuery
 		schemas []*schema.Schema
 	)
@@ -404,14 +404,13 @@ func (i *inspect) schemas(ctx context.Context, opts *schema.InspectRealmOption) 
 		case n == 0:
 			query = schemasQuery
 		case n > 0:
-			query = schemasQueryArgs
+			query = fmt.Sprintf(schemasQueryArgs, "IN ("+nArgs(len(opts.Schemas))+")")
 			for _, s := range opts.Schemas {
 				if s == defaultSchemaNameAlias {
 					s = ""
 				}
-				sArgs = append(sArgs, s)
+				args = append(args, s)
 			}
-			args = append(args, sArgs)
 		}
 	}
 	rows, err := i.QueryContext(ctx, query, args...)
@@ -439,16 +438,18 @@ func (i *inspect) schemas(ctx context.Context, opts *schema.InspectRealmOption) 
 }
 
 func (i *inspect) querySchema(ctx context.Context, query string, s *schema.Schema) (*sql.Rows, error) {
-	tables := make([]string, 0, len(s.Tables))
+	args := []any{s.Name}
 	for _, t := range s.Tables {
-		tables = append(tables, t.Name)
+		args = append(args, t.Name)
 	}
-	sName := s.Name
-	if sName == defaultSchemaNameAlias {
-		sName = ""
+	// Cloud Spanner's default internal schema name is an empty string.
+	if s.Name == defaultSchemaNameAlias {
+		args[0] = ""
 	}
-	return i.QueryContext(ctx, query, sName, tables)
+	return i.QueryContext(ctx, fmt.Sprintf(query, nArgs(len(s.Tables))), args...)
 }
+
+func nArgs(n int) string { return strings.Repeat("?, ", n-1) + "?" }
 
 func defaultExpr(c *schema.Column, x string) schema.Expr {
 	switch {
@@ -500,8 +501,9 @@ type (
 
 	// columnDesc represents a column descriptor.
 	columnDesc struct {
-		typ  string
-		size int
+		typ     string
+		size    int
+		maxSize bool
 	}
 
 	// ParentTable defines an Interleaved tables parent.
@@ -541,7 +543,7 @@ const (
 	schemasQuery = "SELECT schema_name FROM information_schema.schemata WHERE schema_name NOT IN ('INFORMATION_SCHEMA', 'SPANNER_SYS') ORDER BY schema_name"
 
 	// Query to list specific database schemas.
-	schemasQueryArgs = "SELECT schema_name FROM information_schema.schemata WHERE schema_name IN UNNEST (@schemas) ORDER BY schema_name"
+	schemasQueryArgs = "SELECT schema_name FROM information_schema.schemata WHERE schema_name %s ORDER BY schema_name"
 
 	// Query to list table information.
 	tablesQuery = `
@@ -555,7 +557,7 @@ FROM
 	information_schema.tables AS t1
 WHERE
 	t1.table_type = 'BASE TABLE'
-    AND t1.table_schema IN UNNEST (@schemas)
+    AND t1.table_schema IN (%s)
 ORDER BY
 	t1.table_schema, t1.table_name
 `
@@ -600,8 +602,8 @@ select
 from
 	information_schema.columns AS t1
 where
-	table_schema = @schema
-	and table_name IN UNNEST (@table)
+	table_schema = ?
+	and table_name IN (%s)
 order by
 	t1.table_name
 `
@@ -636,8 +638,9 @@ inner join information_schema.index_columns as idx_col
 		and idx.index_name = idx_col.index_name
 where
 	idx.index_type in ('INDEX', 'PRIMARY_KEY')
-	and idx.table_schema = @schema
-	and idx_col.table_name in unnest (@table)
+	and idx.index_name not like 'IDX_%%'
+	and idx.table_schema = ?
+	and idx_col.table_name in (%s)
 order by
 	table_name, index_name, column_position
 `
@@ -667,8 +670,8 @@ FROM
     AND t1.table_schema = t4.constraint_schema
 WHERE
     t1.constraint_type = 'FOREIGN KEY'
-	AND t1.table_schema = @schema
-	AND t1.table_name IN UNNEST (@table)
+	AND t1.table_schema = ?
+	AND t1.table_name IN (%s)
 ORDER BY
     t1.constraint_name,
     t2.ordinal_position
@@ -689,8 +692,8 @@ inner join information_schema.check_constraints as chk
 where
 	tbl.constraint_type = 'CHECK'
 	and not STARTS_WITH(chk.constraint_name, 'CK_IS_NOT_NULL_')
-	and tbl.table_schema = @schema
-	and tbl.table_name IN UNNEST (@table)
+	and tbl.table_schema = ?
+	and tbl.table_name IN (%s)
 order by
 	check_name
 `
