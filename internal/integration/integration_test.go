@@ -66,6 +66,11 @@ type T interface {
 	applyRealmHcl(spec string)
 }
 
+type execQueryCloser interface {
+	schema.ExecQuerier
+	io.Closer
+}
+
 func testAddDrop(t T) {
 	usersT := t.users()
 	postsT := t.posts()

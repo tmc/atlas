@@ -21,7 +21,7 @@ import (
 
 type spannerTest struct {
 	*testing.T
-	db      *sql.DB
+	db      execQueryCloser
 	drv     migrate.Driver
 	rrw     migrate.RevisionReadWriter
 	version string
@@ -46,6 +46,12 @@ func stRun(t *testing.T, fn func(*spannerTest)) {
 						t.Fatal(err)
 					}
 					dbs = append(dbs, tt.db) // close connection after all tests have been run
+					if testing.Verbose() {
+						tt.db = &debugDB{
+							DB: tt.db.(*sql.DB),
+							t:  t,
+						}
+					}
 					tt.drv, err = spanner.Open(tt.db)
 					if err != nil {
 						t.Fatal(err)
@@ -56,6 +62,81 @@ func stRun(t *testing.T, fn func(*spannerTest)) {
 			})
 		}
 	}
+}
+func TestSpanner_HCL(t *testing.T) {
+	full := `
+schema "default" {
+}
+table "users" {
+	schema = schema.default
+	column "id" {
+		type = INT64
+	}
+	primary_key {
+		columns = [table.users.column.id]
+	}
+}
+table "posts" {
+	schema = schema.default
+	column "id" {
+		type = INT64
+	}
+	column "tags" {
+		type = STRING(42)
+	}
+	column "author_id" {
+		type = INT64
+	}
+	foreign_key "author" {
+		columns = [
+			table.posts.column.author_id,
+		]
+		ref_columns = [
+			table.users.column.id,
+		]
+	}
+	primary_key {
+		columns = [table.users.column.id]
+	}
+}
+`
+	empty := `
+schema "default" {
+}
+`
+	stRun(t, func(t *spannerTest) {
+		t.applyHcl(full)
+		users := t.loadUsers()
+		posts := t.loadPosts()
+		t.dropTables(users.Name, posts.Name)
+		t.dropIndexes("idx_author_id", "idx_id_author_id_unique")
+		t.dropConstraints("posts.fk_posts_users_author_id")
+		column, ok := users.Column("id")
+		require.True(t, ok, "expected id column")
+		require.Equal(t, "users", users.Name)
+		column, ok = posts.Column("author_id")
+		require.Equal(t, "author_id", column.Name)
+		t.applyHcl(empty)
+		require.Empty(t, t.realm().Schemas[0].Tables)
+	})
+}
+
+// debugDB wraps a sql.DB and prints the queries run to the associated testing.T.
+type debugDB struct {
+	*sql.DB
+	t *testing.T
+}
+
+func (db *debugDB) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	db.t.Helper()
+	db.t.Log("query:", query, args)
+	return db.DB.QueryContext(ctx, query, args...)
+}
+
+func (db *debugDB) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	db.t.Helper()
+	db.t.Log("exec:", query, args)
+	return db.DB.ExecContext(ctx, query, args...)
 }
 
 func TestSpanner_AddDropTable(t *testing.T) {
@@ -111,12 +192,37 @@ func TestSpanner_AddDropTable(t *testing.T) {
 	})
 }
 
+func TestSpanner_AddColumns(t *testing.T) {
+	stRun(t, func(t *spannerTest) {
+		usersT := t.users()
+		t.dropTables(usersT.Name)
+		t.migrate(&schema.AddTable{T: usersT})
+		usersT.Columns = append(
+			usersT.Columns,
+			&schema.Column{Name: "a", Type: &schema.ColumnType{Type: &schema.BinaryType{T: spanner.TypeBytes}, Null: true}},
+			&schema.Column{Name: "b", Type: &schema.ColumnType{Type: &schema.BinaryType{T: spanner.TypeBytes}, Null: true}},
+		)
+		changes := t.diff(t.loadUsers(), usersT)
+		require.Len(t, changes, 2)
+		t.migrate(&schema.ModifyTable{T: usersT, Changes: changes})
+		ensureNoChange(t, usersT)
+	})
+}
+
 func (t *spannerTest) driver() migrate.Driver {
 	return t.drv
 }
 
 func (t *spannerTest) applyHcl(spec string) {
-	// not implemented
+	realm := t.loadRealm()
+	var desired schema.Schema
+	err := spanner.EvalHCLBytes([]byte(spec), &desired, nil)
+	require.NoError(t, err)
+	existing := realm.Schemas[0]
+	diff, err := t.drv.SchemaDiff(existing, &desired)
+	require.NoError(t, err)
+	err = t.drv.ApplyChanges(context.Background(), diff)
+	require.NoError(t, err)
 }
 
 func (t *spannerTest) applyRealmHcl(spec string) {
