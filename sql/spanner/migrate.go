@@ -177,6 +177,34 @@ func (s *state) alterTable(t *schema.Table, changes []schema.Change) error {
 				return nil, err
 			}
 			statements = append(statements, b.String())
+		case *schema.AddForeignKey:
+			b.P("ALTER TABLE").Table(t)
+			b.P("ADD CONSTRAINT")
+			b.Ident(change.F.Symbol)
+			b.P("FOREIGN KEY")
+			b.Wrap(func(b *sqlx.Builder) {
+				b.MapComma(change.F.Columns, func(i int, b *sqlx.Builder) {
+					b.P(change.F.Columns[i].Name)
+				})
+			})
+			b.P("REFERENCES")
+			b.P(change.F.Table.Name)
+			b.Wrap(func(b *sqlx.Builder) {
+				b.MapComma(change.F.RefColumns, func(i int, b *sqlx.Builder) {
+					b.P(change.F.RefColumns[i].Name)
+				})
+			})
+			statements = append(statements, b.String())
+		case *schema.DropColumn:
+			b.P("ALTER TABLE").Table(t)
+			b.P("DROP COLUMN")
+			b.Ident(change.C.Name)
+			statements = append(statements, b.String())
+		case *schema.DropForeignKey:
+			b.P("ALTER TABLE").Table(t)
+			b.P("DROP CONSTRAINT")
+			b.Ident(change.F.Symbol)
+			statements = append(statements, b.String())
 		case *schema.ModifyColumn:
 			alters, err := s.alterColumn(t, change)
 			if err != nil {
@@ -213,7 +241,7 @@ func (s *state) alterColumn(t *schema.Table, c *schema.ModifyColumn) ([]string, 
 		b.P("ALTER COLUMN").Ident(c.To.Name)
 		switch {
 		case k.Is(schema.ChangeNull) && c.To.Type.Null:
-			b.P("DROP NOT NULL")
+			b.P(c.To.Type.Raw)
 			k &= ^schema.ChangeNull
 		case k.Is(schema.ChangeNull) && !c.To.Type.Null:
 			t, err := FormatType(c.To.Type.Type)
