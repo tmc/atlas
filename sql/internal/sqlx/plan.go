@@ -27,6 +27,7 @@ func ApplyChanges(ctx context.Context, changes []schema.Change, p execPlanner, o
 		return err
 	}
 	for _, c := range plan.Changes {
+		fmt.Println("exec:", c.Cmd)
 		if _, err := p.ExecContext(ctx, c.Cmd, c.Args...); err != nil {
 			if c.Comment != "" {
 				err = fmt.Errorf("%s: %w", c.Comment, err)

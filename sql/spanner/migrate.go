@@ -71,6 +71,8 @@ func (s *state) plan(ctx context.Context, changes []schema.Change) (err error) {
 			err = s.addTable(ctx, c)
 		case *schema.DropTable:
 			err = s.dropTable(c)
+		case *schema.ModifyTable:
+			err = s.modifyTable(ctx, c)
 		case *schema.DropIndex:
 			s.dropIndexes(c.I.Table, c.I)
 		case *schema.DropForeignKey:
@@ -89,7 +91,7 @@ func (s *state) plan(ctx context.Context, changes []schema.Change) (err error) {
 func (s *state) addTable(ctx context.Context, add *schema.AddTable) error {
 	var (
 		errs []string
-		b    = Build("CREATE TABLE").Ident(add.T.Name)
+		b    = s.Build("CREATE TABLE").Ident(add.T.Name)
 	)
 	if sqlx.Has(add.Extra, &schema.IfNotExists{}) {
 		b.P("IF NOT EXISTS")
@@ -122,7 +124,7 @@ func (s *state) addTable(ctx context.Context, add *schema.AddTable) error {
 	s.append(&migrate.Change{
 		Cmd:     b.String(),
 		Source:  add,
-		Reverse: Build("DROP TABLE").Table(add.T).String(),
+		Reverse: s.Build("DROP TABLE").Table(add.T).String(),
 		Comment: fmt.Sprintf("create %q table", add.T.Name),
 	})
 	return s.addIndexes(add.T, add.T.Indexes...)
@@ -131,7 +133,7 @@ func (s *state) addTable(ctx context.Context, add *schema.AddTable) error {
 // dropTable builds and executes the query for dropping a table from a schema.
 func (s *state) dropTable(drop *schema.DropTable) error {
 	s.skipFKs = true
-	b := Build("DROP TABLE").Ident(drop.T.Name)
+	b := s.Build("DROP TABLE").Ident(drop.T.Name)
 	if sqlx.Has(drop.Extra, &schema.IfExists{}) {
 		b.P("IF EXISTS")
 	}
@@ -143,12 +145,140 @@ func (s *state) dropTable(drop *schema.DropTable) error {
 	return nil
 }
 
+// modifyTable builds and executes the queries for bringing the table into its modified state.
+func (s *state) modifyTable(ctx context.Context, modify *schema.ModifyTable) error {
+	var alter []schema.Change
+	for _, change := range modify.Changes {
+		switch change := change.(type) {
+		default:
+			alter = append(alter, change)
+		}
+	}
+	if len(alter) > 0 {
+		if err := s.alterTable(modify.T, alter); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// alterTable modifies the given table by executing on it a list of changes in one SQL statement.
+func (s *state) alterTable(t *schema.Table, changes []schema.Change) error {
+	build := func(change schema.Change) ([]string, error) {
+		var statements []string
+		b := s.Build()
+		switch change := change.(type) {
+		default:
+			return nil, fmt.Errorf("unsupported change type %T", change)
+		case *schema.AddColumn:
+			b.P("ALTER TABLE").Table(t)
+			b.P("ADD COLUMN")
+			if err := s.column(b, change.C); err != nil {
+				return nil, err
+			}
+			statements = append(statements, b.String())
+		case *schema.AddForeignKey:
+			b.P("ALTER TABLE").Table(t)
+			b.P("ADD CONSTRAINT")
+			b.Ident(change.F.Symbol)
+			b.P("FOREIGN KEY")
+			b.Wrap(func(b *sqlx.Builder) {
+				b.MapComma(change.F.Columns, func(i int, b *sqlx.Builder) {
+					b.P(change.F.Columns[i].Name)
+				})
+			})
+			b.P("REFERENCES")
+			b.P(change.F.Table.Name)
+			b.Wrap(func(b *sqlx.Builder) {
+				b.MapComma(change.F.RefColumns, func(i int, b *sqlx.Builder) {
+					b.P(change.F.RefColumns[i].Name)
+				})
+			})
+			statements = append(statements, b.String())
+		case *schema.DropColumn:
+			b.P("ALTER TABLE").Table(t)
+			b.P("DROP COLUMN")
+			b.Ident(change.C.Name)
+			statements = append(statements, b.String())
+		case *schema.DropForeignKey:
+			b.P("ALTER TABLE").Table(t)
+			b.P("DROP CONSTRAINT")
+			b.Ident(change.F.Symbol)
+			statements = append(statements, b.String())
+		case *schema.ModifyColumn:
+			alters, err := s.alterColumn(t, change)
+			if err != nil {
+				return nil, err
+			}
+			statements = append(statements, alters...)
+		}
+		return statements, nil
+	}
+	for _, change := range changes {
+		statements, err := build(change)
+		if err != nil {
+			return fmt.Errorf("alter table %q: %v", t.Name, err)
+		}
+		for _, statement := range statements {
+			change := &migrate.Change{
+				Cmd: statement,
+				Source: &schema.ModifyTable{
+					T:       t,
+					Changes: changes,
+				},
+				Comment: fmt.Sprintf("modify %q table", t.Name),
+			}
+			s.append(change)
+		}
+	}
+	return nil
+}
+
+func (s *state) alterColumn(t *schema.Table, c *schema.ModifyColumn) ([]string, error) {
+	var statements []string
+	for k := c.Change; !k.Is(schema.NoChange); {
+		b := s.Build("ALTER TABLE").Table(t)
+		b.P("ALTER COLUMN").Ident(c.To.Name)
+		switch {
+		case k.Is(schema.ChangeNull) && c.To.Type.Null:
+			b.P(c.To.Type.Raw)
+			k &= ^schema.ChangeNull
+		case k.Is(schema.ChangeNull) && !c.To.Type.Null:
+			t, err := FormatType(c.To.Type.Type)
+			if err != nil {
+				return nil, err
+			}
+			b.P(t)
+			b.P("NOT NULL")
+			k &= ^schema.ChangeNull
+		case k.Is(schema.ChangeDefault) && c.To.Default == nil:
+			b.P("DROP DEFAULT")
+			k &= ^schema.ChangeDefault
+		case k.Is(schema.ChangeDefault) && c.To.Default != nil:
+			s.columnDefault(b.P("SET"), c.To)
+			k &= ^schema.ChangeDefault
+		case k.Is(schema.ChangeType):
+			t, err := FormatType(c.To.Type.Type)
+			if err != nil {
+				return nil, err
+			}
+			b.P(t)
+			k &= ^schema.ChangeType
+		default: // e.g. schema.ChangeComment.
+			return nil, fmt.Errorf("unexpected column change: %v", k)
+		}
+		statements = append(statements, b.String())
+	}
+	return statements, nil
+}
+
 func (s *state) column(b *sqlx.Builder, c *schema.Column) error {
 	t, err := FormatType(c.Type.Type)
 	if err != nil {
 		return err
 	}
 	b.Ident(c.Name).P(t)
+	// TODO: respect spanner semantics for when NOT NULL can be specified.
 	if !c.Type.Null {
 		b.P("NOT")
 		b.P("NULL")
@@ -163,6 +293,26 @@ func (s *state) column(b *sqlx.Builder, c *schema.Column) error {
 		}
 	}
 	return nil
+}
+
+// columnDefault writes the default value of column to the builder.
+func (s *state) columnDefault(b *sqlx.Builder, c *schema.Column) {
+	switch x := c.Default.(type) {
+	case *schema.Literal:
+		v := x.V
+		switch c.Type.Type.(type) {
+		case *schema.BoolType, *schema.DecimalType, *schema.IntegerType, *schema.FloatType:
+		default:
+			v = quote(v)
+		}
+		b.P("DEFAULT").Wrap(func(b *sqlx.Builder) {
+			b.P(v)
+		})
+	case *schema.RawExpr:
+		b.P("DEFAULT").Wrap(func(b *sqlx.Builder) {
+			b.P(x.X)
+		})
+	}
 }
 
 func (s *state) dropIndexes(t *schema.Table, indexes ...*schema.Index) error {
@@ -182,7 +332,7 @@ func (s *state) dropIndexes(t *schema.Table, indexes ...*schema.Index) error {
 
 func (s *state) addIndexes(t *schema.Table, indexes ...*schema.Index) error {
 	for _, idx := range indexes {
-		b := Build("CREATE")
+		b := s.Build("CREATE")
 		if idx.Unique {
 			b.P("UNIQUE")
 		}
@@ -198,7 +348,7 @@ func (s *state) addIndexes(t *schema.Table, indexes ...*schema.Index) error {
 		s.append(&migrate.Change{
 			Cmd:     b.String(),
 			Source:  &schema.AddIndex{I: idx},
-			Reverse: Build("DROP INDEX").Ident(idx.Name).String(),
+			Reverse: s.Build("DROP INDEX").Ident(idx.Name).String(),
 			Comment: fmt.Sprintf("create index %q to table: %q", idx.Name, t.Name),
 		})
 	}
@@ -238,7 +388,7 @@ func (s *state) dropForeignKeys(t *schema.Table, foreignKeys ...*schema.ForeignK
 
 func (s *state) addForeignKeys(t *schema.Table, foreignKeys ...*schema.ForeignKey) error {
 	for _, fk := range foreignKeys {
-		b := Build("ALTER TABLE")
+		b := s.Build("ALTER TABLE")
 		b.Ident(t.Name)
 		b.P("ADD")
 		s.fks(b, foreignKeys...)
@@ -247,7 +397,7 @@ func (s *state) addForeignKeys(t *schema.Table, foreignKeys ...*schema.ForeignKe
 		s.append(&migrate.Change{
 			Cmd:    b.String(),
 			Source: &schema.AddForeignKey{F: fk},
-			Reverse: Build("ALTER TABLE").
+			Reverse: s.Build("ALTER TABLE").
 				Ident(t.Name).
 				P(fmt.Sprintf("DROP CONSTRAINT %v", fkName)).
 				String(),
@@ -298,7 +448,15 @@ func check(b *sqlx.Builder, c *schema.Check) {
 }
 
 // Build instantiates a new builder and writes the given phrase to it.
-func Build(phrase string) *sqlx.Builder {
-	b := &sqlx.Builder{QuoteChar: '`'}
-	return b.P(phrase)
+func (s *state) Build(phrases ...string) *sqlx.Builder {
+	emptySchema := ""
+	b := &sqlx.Builder{QuoteChar: '`', Schema: &emptySchema}
+	return b.P(phrases...)
+}
+
+func quote(s string) string {
+	if sqlx.IsQuoted(s, '\'') {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
 }

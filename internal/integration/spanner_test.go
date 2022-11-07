@@ -58,6 +58,70 @@ func stRun(t *testing.T, fn func(*spannerTest)) {
 	}
 }
 
+func TestSpanner_ColumnArray(t *testing.T) {
+	stRun(t, func(t *spannerTest) {
+		usersT := t.users()
+		t.dropTables(usersT.Name)
+		t.migrate(&schema.AddTable{T: usersT})
+
+		// Add column.
+		usersT.Columns = append(
+			usersT.Columns,
+			&schema.Column{Name: "a", Type: &schema.ColumnType{Raw: "ARRAY<INT64>", Type: &spanner.ArrayType{Type: &schema.IntegerType{T: "INT64"}, T: "ARRAY<INT64>"}, Null: true}},
+		)
+		changes := t.diff(t.loadUsers(), usersT)
+		require.Len(t, changes, 1)
+		t.migrate(&schema.ModifyTable{T: usersT, Changes: changes})
+		ensureNoChange(t, usersT)
+	})
+}
+
+func TestSpanner_ForeignKey(t *testing.T) {
+	t.Run("AddDrop", func(t *testing.T) {
+		stRun(t, func(t *spannerTest) {
+			usersT := t.users()
+			t.dropTables(usersT.Name)
+			t.dropIndexes("idx_author_id", "idx_id_author_id_unique")
+			t.dropConstraints("posts.fk_posts_users_author_id")
+			t.migrate(&schema.AddTable{T: usersT})
+			ensureNoChange(t, usersT)
+
+			// Add foreign key.
+			usersT.Columns = append(usersT.Columns, &schema.Column{
+				Name: "spouse_id",
+				Type: &schema.ColumnType{Raw: "INT64", Type: &schema.IntegerType{T: "INT64"}, Null: true},
+			})
+			usersT.ForeignKeys = append(usersT.ForeignKeys, &schema.ForeignKey{
+				Symbol:     "spouse_id",
+				Table:      usersT,
+				Columns:    usersT.Columns[len(usersT.Columns)-1:],
+				RefTable:   usersT,
+				RefColumns: usersT.Columns[:1],
+				OnDelete:   schema.NoAction,
+			})
+
+			changes := t.diff(t.loadUsers(), usersT)
+			require.Len(t, changes, 2)
+			addC, ok := changes[0].(*schema.AddColumn)
+			require.True(t, ok)
+			require.Equal(t, "spouse_id", addC.C.Name)
+			addF, ok := changes[1].(*schema.AddForeignKey)
+			require.True(t, ok)
+			require.Equal(t, "spouse_id", addF.F.Symbol)
+			t.migrate(&schema.ModifyTable{T: usersT, Changes: changes})
+			ensureNoChange(t, usersT)
+
+			// Drop foreign keys.
+			usersT.Columns = usersT.Columns[:len(usersT.Columns)-1]
+			usersT.ForeignKeys = usersT.ForeignKeys[:len(usersT.ForeignKeys)-1]
+			changes = t.diff(t.loadUsers(), usersT)
+			require.Len(t, changes, 2)
+			t.migrate(&schema.ModifyTable{T: usersT, Changes: changes})
+			ensureNoChange(t, usersT)
+		})
+	})
+}
+
 func TestSpanner_AddDropTable(t *testing.T) {
 	stRun(t, func(t *spannerTest) {
 		usersT := t.users()
@@ -111,12 +175,144 @@ func TestSpanner_AddDropTable(t *testing.T) {
 	})
 }
 
+func TestSpanner_AddColumns(t *testing.T) {
+	stRun(t, func(t *spannerTest) {
+		usersT := t.users()
+		t.dropTables(usersT.Name)
+		t.migrate(&schema.AddTable{T: usersT})
+		usersT.Columns = append(
+			usersT.Columns,
+			&schema.Column{Name: "a", Type: &schema.ColumnType{Type: &schema.BinaryType{T: spanner.TypeBytes}, Null: true}},
+			&schema.Column{Name: "b", Type: &schema.ColumnType{Type: &schema.BinaryType{T: spanner.TypeBytes}, Null: true}},
+			// note: The spanner emulator doesn't yet support default values so these cases can't be added.
+			// &schema.Column{Name: "b", Type: &schema.ColumnType{Type: &schema.FloatType{T: spanner.TypeFloat64}}, Default: &schema.Literal{V: "10.1"}},
+			// &schema.Column{Name: "c", Type: &schema.ColumnType{Type: &schema.StringType{T: spanner.TypeString}}, Default: &schema.Literal{V: "'y'"}},
+			// &schema.Column{Name: "d", Type: &schema.ColumnType{Type: &schema.DecimalType{T: spanner.TypeNumeric}}, Default: &schema.Literal{V: "0.99"}},
+			// &schema.Column{Name: "e", Type: &schema.ColumnType{Type: &schema.JSONType{T: spanner.TypeJSON}}, Default: &schema.Literal{V: "'{}'"}},
+			// &schema.Column{Name: "f", Type: &schema.ColumnType{Type: &schema.BoolType{T: spanner.TypeBool}, Null: true}, Default: &schema.Literal{V: "false"}},
+		)
+		changes := t.diff(t.loadUsers(), usersT)
+		require.Len(t, changes, 2)
+		t.migrate(&schema.ModifyTable{T: usersT, Changes: changes})
+		ensureNoChange(t, usersT)
+	})
+}
+
+func TestSpanner_ColumnInt(t *testing.T) {
+	ctx := context.Background()
+	run := func(t *testing.T, change func(*schema.Column)) {
+		stRun(t, func(t *spannerTest) {
+			usersT := &schema.Table{
+				Name: "users",
+				Columns: []*schema.Column{
+					{Name: "a", Type: &schema.ColumnType{Type: &schema.IntegerType{T: "INT64"}}},
+					{Name: "b", Type: &schema.ColumnType{Type: &schema.BinaryType{T: "BYTES"}, Null: true}},
+				},
+			}
+			usersT.PrimaryKey = &schema.Index{
+				Name:   "PRIMARY_KEY_USERS",
+				Unique: true,
+				Table:  usersT,
+				Parts:  []*schema.IndexPart{{C: usersT.Columns[0]}},
+			}
+			usersT.Columns[0].Indexes = []*schema.Index{usersT.PrimaryKey}
+
+			err := t.drv.ApplyChanges(ctx, []schema.Change{&schema.AddTable{T: usersT}})
+			require.NoError(t, err)
+			t.dropTables(usersT.Name)
+			change(usersT.Columns[1])
+			changes := t.diff(t.loadUsers(), usersT)
+			require.Len(t, changes, 1)
+			t.migrate(&schema.ModifyTable{T: usersT, Changes: changes})
+			ensureNoChange(t, usersT)
+		})
+	}
+
+	t.Run("ChangeNull", func(t *testing.T) {
+		run(t, func(c *schema.Column) {
+			c.Type.Null = false
+		})
+	})
+
+	t.Run("ChangeType", func(t *testing.T) {
+		run(t, func(c *schema.Column) {
+			c.Type.Type = &schema.StringType{T: "STRING", Size: 41}
+		})
+	})
+}
+
+func TestSpanner_HCL(t *testing.T) {
+	full := `
+schema "default" {
+}
+table "users" {
+	schema = schema.default
+	column "id" {
+		type = INT64
+	}
+	primary_key {
+		columns = [table.users.column.id]
+	}
+}
+table "posts" {
+	schema = schema.default
+	column "id" {
+		type = INT64
+	}
+	column "tags" {
+		type = STRING(42)
+	}
+	column "author_id" {
+		type = INT64
+	}
+	foreign_key "author" {
+		columns = [
+			table.posts.column.author_id,
+		]
+		ref_columns = [
+			table.users.column.id,
+		]
+	}
+	primary_key {
+		columns = [table.users.column.id]
+	}
+}
+`
+	empty := `
+schema "default" {
+}
+`
+	stRun(t, func(t *spannerTest) {
+		t.applyHcl(full)
+		users := t.loadUsers()
+		posts := t.loadPosts()
+		t.dropTables(users.Name, posts.Name)
+		t.dropIndexes("idx_author_id", "idx_id_author_id_unique")
+		t.dropConstraints("posts.fk_posts_users_author_id")
+		column, ok := users.Column("id")
+		require.True(t, ok, "expected id column")
+		require.Equal(t, "users", users.Name)
+		column, ok = posts.Column("author_id")
+		require.Equal(t, "author_id", column.Name)
+		t.applyHcl(empty)
+		require.Empty(t, t.realm().Schemas[0].Tables)
+	})
+}
+
 func (t *spannerTest) driver() migrate.Driver {
 	return t.drv
 }
 
 func (t *spannerTest) applyHcl(spec string) {
-	// not implemented
+	realm := t.loadRealm()
+	var desired schema.Schema
+	err := spanner.EvalHCLBytes([]byte(spec), &desired, nil)
+	require.NoError(t, err)
+	existing := realm.Schemas[0]
+	diff, err := t.drv.SchemaDiff(existing, &desired)
+	require.NoError(t, err)
+	err = t.drv.ApplyChanges(context.Background(), diff)
+	require.NoError(t, err)
 }
 
 func (t *spannerTest) applyRealmHcl(spec string) {
@@ -188,11 +384,11 @@ func (t *spannerTest) posts() *schema.Table {
 			},
 			{
 				Name: "author_id",
-				Type: &schema.ColumnType{Raw: "INT64", Type: &schema.IntegerType{T: "INT64"}, Null: true},
+				Type: &schema.ColumnType{Raw: "INT64", Type: &schema.IntegerType{T: "INT64"}, Null: false},
 			},
 			{
 				Name: "ctime",
-				Type: &schema.ColumnType{Raw: "timestamp", Type: &schema.TimeType{T: "timestamp"}},
+				Type: &schema.ColumnType{Raw: "TIMESTAMP", Type: &schema.TimeType{T: "TIMESTAMP"}},
 			},
 		},
 		Attrs: []schema.Attr{
@@ -205,7 +401,7 @@ func (t *spannerTest) posts() *schema.Table {
 		{Name: "idx_id_author_id_unique", Unique: true, Parts: []*schema.IndexPart{{C: postsT.Columns[1]}, {C: postsT.Columns[0]}}},
 	}
 	postsT.ForeignKeys = []*schema.ForeignKey{
-		{Symbol: "fk_posts_users_author_id", Table: postsT, Columns: postsT.Columns[1:2], RefTable: usersT, RefColumns: usersT.Columns[:1], OnDelete: schema.NoAction},
+		{Symbol: "fk_posts_users_author_id", Table: postsT, Columns: postsT.Columns[1:2], RefTable: usersT, RefColumns: usersT.Columns[:1]},
 	}
 	return postsT
 }
