@@ -168,6 +168,22 @@ func (d *Diff) TableDiff(from, to *schema.Table) ([]schema.Change, error) {
 	}
 	changes = append(changes, change...)
 
+	// Drop or modify foreign-keys.
+	for _, fk1 := range from.ForeignKeys {
+		fk2, ok := to.ForeignKey(fk1.Symbol)
+		if !ok {
+			changes = append(changes, &schema.DropForeignKey{F: fk1})
+			continue
+		}
+		if change := d.fkChange(fk1, fk2); change != schema.NoChange {
+			changes = append(changes, &schema.ModifyForeignKey{
+				From:   fk1,
+				To:     fk2,
+				Change: change,
+			})
+		}
+	}
+
 	// Drop or modify columns.
 	for _, c1 := range from.Columns {
 		c2, ok := to.Column(c1.Name)
@@ -197,21 +213,6 @@ func (d *Diff) TableDiff(from, to *schema.Table) ([]schema.Change, error) {
 	// Index changes.
 	changes = append(changes, d.indexDiff(from, to)...)
 
-	// Drop or modify foreign-keys.
-	for _, fk1 := range from.ForeignKeys {
-		fk2, ok := to.ForeignKey(fk1.Symbol)
-		if !ok {
-			changes = append(changes, &schema.DropForeignKey{F: fk1})
-			continue
-		}
-		if change := d.fkChange(fk1, fk2); change != schema.NoChange {
-			changes = append(changes, &schema.ModifyForeignKey{
-				From:   fk1,
-				To:     fk2,
-				Change: change,
-			})
-		}
-	}
 	// Add foreign-keys.
 	for _, fk1 := range to.ForeignKeys {
 		if _, ok := from.ForeignKey(fk1.Symbol); !ok {
