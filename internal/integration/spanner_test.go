@@ -76,6 +76,81 @@ func TestSpanner_ColumnArray(t *testing.T) {
 	})
 }
 
+func TestSpanner_ForeignKey(t *testing.T) {
+	t.Run("UnsetNull", func(t *testing.T) {
+		stRun(t, func(t *spannerTest) {
+			usersT, postsT := t.users(), t.posts()
+			t.dropTables(postsT.Name, usersT.Name)
+			t.dropIndexes("idx_author_id", "idx_id_author_id_unique")
+			t.dropConstraints("posts.fk_posts_users_author_id")
+			fk, ok := postsT.ForeignKey("fk_posts_users_author_id")
+			require.True(t, ok)
+			fk.OnDelete = schema.SetNull
+			fk.OnUpdate = schema.SetNull
+			t.migrate(&schema.AddTable{T: usersT}, &schema.AddTable{T: postsT})
+			ensureNoChange(t, postsT, usersT)
+
+			postsT = t.loadPosts()
+			c, ok := postsT.Column("author_id")
+			require.True(t, ok)
+			c.Type.Null = false
+			fk, ok = postsT.ForeignKey("fk_posts_users_author_id")
+			require.True(t, ok)
+			changes := t.diff(t.loadPosts(), postsT)
+			require.Len(t, changes, 1)
+			modifyC, ok := changes[0].(*schema.ModifyColumn)
+			require.True(t, ok)
+			require.True(t, modifyC.Change == schema.ChangeNull)
+			t.migrate(&schema.ModifyTable{T: postsT, Changes: changes})
+			ensureNoChange(t, postsT, usersT)
+		})
+	})
+
+	t.Run("AddDrop", func(t *testing.T) {
+		stRun(t, func(t *spannerTest) {
+			usersT := t.users()
+			t.dropTables(usersT.Name)
+			t.dropIndexes("idx_author_id", "idx_id_author_id_unique")
+			t.dropConstraints("posts.fk_posts_users_author_id")
+			t.migrate(&schema.AddTable{T: usersT})
+			ensureNoChange(t, usersT)
+
+			// Add foreign key.
+			usersT.Columns = append(usersT.Columns, &schema.Column{
+				Name: "spouse_id",
+				Type: &schema.ColumnType{Raw: "bigint", Type: &schema.IntegerType{T: "bigint"}, Null: true},
+			})
+			usersT.ForeignKeys = append(usersT.ForeignKeys, &schema.ForeignKey{
+				Symbol:     "spouse_id",
+				Table:      usersT,
+				Columns:    usersT.Columns[len(usersT.Columns)-1:],
+				RefTable:   usersT,
+				RefColumns: usersT.Columns[:1],
+				OnDelete:   schema.NoAction,
+			})
+
+			changes := t.diff(t.loadUsers(), usersT)
+			require.Len(t, changes, 2)
+			addC, ok := changes[0].(*schema.AddColumn)
+			require.True(t, ok)
+			require.Equal(t, "spouse_id", addC.C.Name)
+			addF, ok := changes[1].(*schema.AddForeignKey)
+			require.True(t, ok)
+			require.Equal(t, "spouse_id", addF.F.Symbol)
+			t.migrate(&schema.ModifyTable{T: usersT, Changes: changes})
+			ensureNoChange(t, usersT)
+
+			// Drop foreign keys.
+			usersT.Columns = usersT.Columns[:len(usersT.Columns)-1]
+			usersT.ForeignKeys = usersT.ForeignKeys[:len(usersT.ForeignKeys)-1]
+			changes = t.diff(t.loadUsers(), usersT)
+			require.Len(t, changes, 2)
+			t.migrate(&schema.ModifyTable{T: usersT, Changes: changes})
+			ensureNoChange(t, usersT)
+		})
+	})
+}
+
 func TestSpanner_HCL(t *testing.T) {
 	full := `
 schema "default" {
@@ -413,7 +488,7 @@ func (t *spannerTest) posts() *schema.Table {
 		{Name: "idx_id_author_id_unique", Unique: true, Parts: []*schema.IndexPart{{C: postsT.Columns[1]}, {C: postsT.Columns[0]}}},
 	}
 	postsT.ForeignKeys = []*schema.ForeignKey{
-		{Symbol: "fk_posts_users_author_id", Table: postsT, Columns: postsT.Columns[1:2], RefTable: usersT, RefColumns: usersT.Columns[:1], OnDelete: schema.NoAction},
+		{Symbol: "fk_posts_users_author_id", Table: postsT, Columns: postsT.Columns[1:2], RefTable: usersT, RefColumns: usersT.Columns[:1]},
 	}
 	return postsT
 }
