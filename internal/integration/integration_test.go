@@ -23,6 +23,7 @@ import (
 	"ariga.io/atlas/schemahcl"
 	"ariga.io/atlas/sql/migrate"
 	"ariga.io/atlas/sql/schema"
+	"ariga.io/atlas/sql/spanner"
 	entsql "entgo.io/ent/dialect/sql"
 	entschema "entgo.io/ent/dialect/sql/schema"
 	"entgo.io/ent/entc/integration/ent"
@@ -522,6 +523,25 @@ func ensureNoChange(t T, tables ...*schema.Table) {
 		tt, ok := realm.Schemas[0].Table(tables[i].Name)
 		require.True(t, ok)
 		changes := t.diff(tt, tables[i])
+		for _, c := range changes {
+			fmt.Println("C:", c)
+			if c, ok := c.(*schema.ModifyColumn); ok {
+				fmt.Printf("c: %#v\n", c)
+				fmt.Printf("c: f: %#v\n", c.From.Type)
+				fmt.Printf("c: t: %#v\n", c.To.Type)
+				fmt.Printf("c: td: %#v\n", c.To.Default)
+				fmt.Printf("c: fd: %#v\n", c.From.Default)
+				if at, ok := c.From.Type.Type.(*spanner.ArrayType); ok {
+					fmt.Printf("c: f at: %#v\n", at)
+					fmt.Printf("c: f at: %#v\n", at.Type)
+				}
+				if at, ok := c.To.Type.Type.(*spanner.ArrayType); ok {
+					fmt.Printf("c: t at: %#v\n", at)
+					fmt.Printf("c: t at: %#v\n", at.Type)
+				}
+			}
+		}
+
 		require.Emptyf(t, changes, "changes should be empty for table %s, but instead was %#v", tt.Name, changes)
 	}
 }
