@@ -379,6 +379,7 @@ func (s *state) addIndexes(t *schema.Table, indexes ...*schema.Index) error {
 		b := s.Build("CREATE")
 		if idx.Unique {
 			b.P("UNIQUE")
+			b.P("NULL_FILTERED")
 		}
 		b.P("INDEX")
 		if idx.Name != "" {

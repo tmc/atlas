@@ -11,10 +11,15 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"ariga.io/atlas/sql/migrate"
 	"ariga.io/atlas/sql/schema"
 	"ariga.io/atlas/sql/spanner"
+	"entgo.io/ent/dialect"
+	entsql "entgo.io/ent/dialect/sql"
+	entschema "entgo.io/ent/dialect/sql/schema"
+	"entgo.io/ent/entc/integration/ent"
 	_ "github.com/googleapis/go-sql-spanner"
 	"github.com/stretchr/testify/require"
 )
@@ -199,6 +204,69 @@ func TestSpanner_ColumnArray(t *testing.T) {
 		t.migrate(&schema.ModifyTable{T: usersT, Changes: changes})
 		ensureNoChange(t, usersT)
 	})
+}
+
+func TestSpanner_Ent(t *testing.T) {
+	stRun(t, func(t *spannerTest) {
+		testEntSpannerIntegration(t, dialect.Spanner, t.db)
+	})
+}
+
+func testEntSpannerIntegration(t T, dialect string, db *sql.DB, opts ...entschema.MigrateOption) {
+	ctx := context.Background()
+	drv := entsql.OpenDB(dialect, db)
+	client := ent.NewClient(ent.Driver(drv)).Debug()
+	require.NoError(t, client.Schema.Create(ctx, opts...))
+	sanityWithProvidedIDs(client)
+	realm := t.loadRealm()
+	ensureNoChange(t, realm.Schemas[0].Tables...)
+
+	// Drop tables.
+	changes := make([]schema.Change, len(realm.Schemas[0].Tables))
+	for i, t := range realm.Schemas[0].Tables {
+		changes[i] = &schema.DropTable{T: t}
+	}
+	t.migrate(changes...)
+
+	// Add tables.
+	for i, t := range realm.Schemas[0].Tables {
+		changes[i] = &schema.AddTable{T: t}
+	}
+	t.migrate(changes...)
+	ensureNoChange(t, realm.Schemas[0].Tables...)
+	sanityWithProvidedIDs(client)
+
+	// Drop tables.
+	for i, t := range realm.Schemas[0].Tables {
+		changes[i] = &schema.DropTable{T: t}
+	}
+	t.migrate(changes...)
+}
+
+func sanityWithProvidedIDs(c *ent.Client) {
+	ctx := context.Background()
+	u := c.User.Create().
+		SetName("foo").
+		SetAge(20).
+		AddPets(
+			c.Pet.Create().SetName("pedro").
+				SetNickname("pedro").
+				SaveX(ctx),
+			c.Pet.Create().SetName("xabi").
+				SetNickname("xabi").
+				SaveX(ctx),
+		).
+		AddFiles(
+			c.File.Create().SetName("a").SetSize(10).SaveX(ctx),
+			c.File.Create().SetName("b").SetSize(20).SaveX(ctx),
+		).
+		SaveX(ctx)
+	c.Group.Create().
+		SetName("Github").
+		SetExpire(time.Now()).
+		AddUsers(u).
+		SetInfo(c.GroupInfo.Create().SetDesc("desc").SaveX(ctx)).
+		SaveX(ctx)
 }
 
 func TestSpanner_ForeignKey(t *testing.T) {

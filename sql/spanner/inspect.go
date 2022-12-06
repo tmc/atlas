@@ -218,6 +218,7 @@ func columnType(spannerType string) (schema.Type, error) {
 	spannerType = strings.TrimSpace(strings.ToUpper(spannerType))
 
 	// ARRAY type handling.
+	fmt.Println("columnType:", spannerType, arrayTypeRe.MatchString(spannerType))
 	if arrayTypeRe.MatchString(spannerType) {
 		parts := arrayTypeRe.FindStringSubmatch(spannerType)
 		inner, err := columnType(parts[1])
@@ -278,6 +279,7 @@ func columnType(spannerType string) (schema.Type, error) {
 				Attrs: attrs,
 			}
 		} else {
+			panic("unsupp!")
 			typ = &schema.UnsupportedType{T: col.typ}
 		}
 	}

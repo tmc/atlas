@@ -6,8 +6,6 @@ package spanner
 
 import (
 	"fmt"
-	"strconv"
-	"strings"
 
 	"ariga.io/atlas/sql/internal/sqlx"
 	"ariga.io/atlas/sql/schema"
@@ -64,67 +62,5 @@ func ParseType(c string) (schema.Type, error) {
 	if c == "" {
 		return &schema.UnsupportedType{}, nil
 	}
-	cd, err := parseColumn(c)
-	if err != nil {
-		return &schema.UnsupportedType{
-			T: c,
-		}, nil
-	}
-
-	switch cd.typ {
-	case TypeInt64:
-		return &schema.IntegerType{
-			T: TypeInt64,
-		}, nil
-	case TypeString:
-		return &schema.StringType{
-			T:    TypeString,
-			Size: cd.size,
-		}, nil
-	case TypeBytes:
-		s := cd.size
-		return &schema.BinaryType{
-			T:    TypeBytes,
-			Size: &s,
-		}, nil
-	case TypeTimestamp:
-		return &schema.TimeType{
-			T: TypeTimestamp,
-		}, nil
-	case TypeDate:
-		return &schema.TimeType{
-			T: TypeDate,
-		}, nil
-	case TypeBool:
-		return &schema.BoolType{
-			T: TypeBool,
-		}, nil
-	default:
-		return &schema.UnsupportedType{
-			T: c,
-		}, nil
-	}
-}
-
-// parseColumn attempts to populate a columnDesc.
-func parseColumn(s string) (*columnDesc, error) {
-	var err error
-	cd := &columnDesc{}
-	// split up type into, base type, size, and other modifiers.
-	m := sizedTypeRe.FindStringSubmatch(strings.ToUpper(s))
-	if len(m) == 0 {
-		return nil, fmt.Errorf("parseColumn: invalid type: %q", s)
-	}
-	cd.typ = m[1]
-	if len(m) > 2 && m[2] != "" {
-		if m[2] == "MAX" {
-			cd.maxSize = true
-		} else {
-			cd.size, err = strconv.Atoi(m[2])
-			if err != nil {
-				return nil, fmt.Errorf("parseColumn: unable to convert %q to int: %w", m[2], err)
-			}
-		}
-	}
-	return cd, nil
+	return columnType(c)
 }
